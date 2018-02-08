@@ -19,7 +19,7 @@ class Image(ImageAPI):
 		self.tags = data['tags']
 		self.container_format = data['container_format']
 		self.created_at = data['created_at']
-		self.size = data['size']
+		self.size = None if 'size' not in data else data['size']
 		self.disk_format = data['disk_format']
 		self.updated_at = data['updated_at']
 		self.visibility = data['visibility']
@@ -28,9 +28,9 @@ class Image(ImageAPI):
 		self.protected = data['protected']
 		self.min_ram = data['min_ram']
 		self.file = data['file']
-		self.checksum = data['checksum']
+		self.checksum = None if 'checksum' not in data else data['checksum']
 		self.owner = data['owner']
-		self.direct_url = data['direct_url']
+		self.direct_url = None if 'direct_url' not in data else data['direct_url']
 		self.hw_qemu_guest_agent = data.get('hw_qemu_guest_agent')
 		self.schema = data['schema']
 

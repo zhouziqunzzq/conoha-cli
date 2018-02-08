@@ -198,7 +198,7 @@ class VM(ComputeAPI):
 
 	def _action(self, actionName, actionValue=None):
 		action = {actionName: actionValue}
-		self._POST('action', action, isDeserialize=False)
+		return self._POST('action', action, isDeserialize=False)
 	def start(self):
 		self._action('os-start')
 	def stop(self, force=False):
@@ -218,7 +218,8 @@ class VM(ComputeAPI):
 		res = self._GET('')
 		return res['server']['status']
 	def createImage(self, image_name):
-		self._action('createImage', {'name': image_name})
+		rst = self._action('createImage', {'name': image_name}).headers['Location'].split('/')
+		return rst[len(rst)-1]
 
 class KeyList(ComputeAPI, CustomList):
 	"""SSHの鍵の一覧"""
