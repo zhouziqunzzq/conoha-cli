@@ -195,6 +195,7 @@ class VM(ComputeAPI):
 		self.updated = info['updated']
 		self.addressList = info['addresses']
 		self.securityGroupList = info['security_groups']
+		self.rawInfo = info
 
 	def _action(self, actionName, actionValue=None):
 		action = {actionName: actionValue}
