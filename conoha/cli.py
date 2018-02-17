@@ -13,6 +13,7 @@ from conoha.image import ImageList, Quota
 from tabulate import tabulate
 import functools
 from conoha import error
+import typing
 
 formatters = ('plain', 'simple', 'vertical')
 maxCommandNameLength = 20
@@ -188,7 +189,7 @@ def getArgumentParser():
 
 	return parser
 
-class ComputeCommand():
+class ComputeCommand:
 	@classmethod
 	def configureParser(cls, subparser):
 		listCommands = {
@@ -226,20 +227,29 @@ class ComputeCommand():
 		addVmParser.set_defaults(func=cls.add_vm)
 
 		vmCommands = {
-				'start-vm' : {'func': cls.start_vm,  'help': 'start VM'},
-				'stop-vm':   {'func': cls.stop_vm,   'help': 'stop VM'},
-				'reboot-vm': {'func': cls.reboot_vm, 'help': 'reboot VM'},
-				'modify-vm': {'func': cls.modify_vm, 'help': 'change plan'},
-				'delete-vm': {'func': cls.delete_vm, 'help': 'delete VM'},
+				'start-vm' :    {'func': cls.start_vm,     'help': 'start VM'},
+				'stop-vm':      {'func': cls.stop_vm,      'help': 'stop VM'},
+				'reboot-vm':    {'func': cls.reboot_vm,    'help': 'reboot VM'},
+				'modify-vm':    {'func': cls.modify_vm,    'help': 'change plan'},
+				'delete-vm':    {'func': cls.delete_vm,    'help': 'delete VM'},
+				'create-image': {'func': cls.create_image, 'help': 'save local disk'},
 				}
 		for cmd in vmCommands:
 			vmParser = subparser.add_parser(cmd, help=vmCommands[cmd]['help'])
-			vmParser.add_argument('-n', '--name', type=str, help='VM name')
-			vmParser.add_argument('-i', '--id',   type=str, help='VM id')
+			vmParser.add_argument('-n', '--name', type=str, help='VM name (obsolete)')
+			vmParser.add_argument('-i', '--id',   type=str, help='VM id (obsolete)')
+
+			if cmd not in ['create-image']:
+				vmParser.add_argument('names', type=str, nargs='*', metavar='NAME', help='ID or name')
+			else:
+				vmParser.add_argument('names', type=str, nargs='?', metavar='NAME', help='ID or name')
+
 			if cmd == 'stop-vm':
 				vmParser.add_argument('-f', '--force', action='store_true')
 			elif cmd == 'modify-vm':
 				vmParser.add_argument('-P', '--planid', type=str, help='plan id')
+			elif cmd == 'create-image':
+				vmParser.add_argument('-I', '--image-name', type=str, help='Image name')
 			vmParser.set_defaults(func=vmCommands[cmd]['func'])
 
 	@classmethod
@@ -330,44 +340,59 @@ class ComputeCommand():
 	@classmethod
 	@prettyPrint()
 	def start_vm(cls, token, args):
-		vmlist = VMList(token)
-		vm = vmlist.getServer(vmid=args.id, name=args.name)
-		if vm:
+		for vm in cls._vmlist(token, args):
 			vm.start()
 
 	@classmethod
 	@prettyPrint()
 	def stop_vm(cls, token, args):
-		vmlist = VMList(token)
-		vm = vmlist.getServer(vmid=args.id, name=args.name)
-		if vm:
+		for vm in cls._vmlist(token, args):
 			vm.stop(args.force)
 
 	@classmethod
 	@prettyPrint()
 	def reboot_vm(cls, token, args):
-		vmlist = VMList(token)
-		vm = vmlist.getServer(vmid=args.id, name=args.name)
-		if vm:
+		for vm in cls._vmlist(token, args):
 			vm.restart()
 
 	@classmethod
 	@prettyPrint()
 	def delete_vm(cls, token, args):
 		vmlist = VMList(token)
-		vm = vmlist.getServer(vmid=args.id, name=args.name)
-		if vm:
+		for vm in cls._vmlist(token, args):
 			vmlist.delete(vm.vmid)
 
 	@classmethod
 	@prettyPrint()
 	def modify_vm(cls, token, args):
+		for vm in cls._vmlist(token, args):
+			vm.resize(args.planid)
+
+	@classmethod
+	def create_image(cls, token, args):
 		vmlist = VMList(token)
 		vm = vmlist.getServer(vmid=args.id, name=args.name)
 		if vm:
-			vm.resize(args.planid)
+			vm.createImage(args.image_name)
 
-class NetworkCommand():
+	@classmethod
+	def _vmlist(cls, token, args)->typing.Iterable[conoha.compute.VM]:
+		vmlist = VMList(token)
+		if args.names:
+			for name in args.names:
+				vm = vmlist.getServer(vmid=name, name=name)
+				if vm is None:
+					raise error.VMNotFound(name)
+				yield vm
+		elif args.id or args.name:
+			vm = vmlist.getServer(vmid=args.id, name=args.name)
+			if vm is None:
+				raise error.VMNotFound(args.id or args.name)
+			yield vm
+		else:
+			raise error.InvalidArgumentError('argument is not specified: must specify the --name, --id or NAME positional argument')
+
+class NetworkCommand:
 	@classmethod
 	def configureParser(cls, subparser):
 		listSG = subparser.add_parser('list-security-groups', help='')
@@ -473,7 +498,7 @@ class NetworkCommand():
 		sg = sglist[args.group or args.group_id]
 		sg.rules.delete(args.rule_id)
 
-class BlockCommand():
+class BlockCommand:
 	@classmethod
 	def configureParser(cls, subparser):
 		listTypes = subparser.add_parser('list-types', help='display volume types')
@@ -556,12 +581,20 @@ class BlockCommand():
 		vol = volumeList[args.id or args.name]
 		volumeList.delete(vol.volumeId)
 
-class ImageCommand():
+class ImageCommand:
 	@classmethod
 	def configureParser(cls, subparser):
 		listImages = subparser.add_parser('list-images', help='list saved images in current region')
-		listImages.add_argument('-v', '--verbose', action='store_true', help='be verbose')
+		listImages.add_argument('-v', '--verbose', action='store_true', help='verbose output')
+		listImages.add_argument('-b', '--visibility', choices=['public', 'private'], help='filter by visibility of the image')
+		listImages.add_argument('-s', '--sort', help='sort by comma delimited field names',
+		                        default='visibility,name')
 		listImages.set_defaults(func=cls.listImages)
+
+		deleteImage = subparser.add_parser('delete-image', help='delete image')
+		deleteImage.add_argument('-v', '--verbose', action='store_true', help='verbose output')
+		deleteImage.add_argument('images', type=str, nargs='+', metavar='IMAGES', help='image names')
+		deleteImage.set_defaults(func=cls.deleteImage)
 
 		showQuota = subparser.add_parser('show-quota', help='show quota')
 		showQuota.set_defaults(func=cls.showQuota)
@@ -574,9 +607,36 @@ class ImageCommand():
 	@prettyPrint()
 	def listImages(cls, token, args):
 		images  = ImageList(token)
-		yield ['ID', 'Name', 'MinDisk', 'MinRAM', 'Status', 'CreatedAt']
-		for i in images:
-			yield [i.imageId, i.name, i.min_disk, i.min_ram, i.status, i.created_at]
+		def filterFn(i):
+			if args.visibility:
+				return args.visibility == i.visibility
+			return True
+
+		def sortKey(i):
+			fieldNames = args.sort.split(',')
+			return tuple(getattr(i, f, '') for f in fieldNames)
+
+		# Header
+		if args.verbose:
+			yield ['ID', 'Name', 'MinDisk', 'MinRam', 'Status', 'CreatedAt', 'Visibility']
+		else:
+			yield ['Name', 'Status', 'CreatedAt', 'Visibility']
+		# Body
+		for i in sorted(filter(filterFn, images), key=sortKey):
+			if args.verbose:
+				yield [i.imageId, i.name, i.min_disk, i.min_ram, i.status, i.created_at, i.visibility]
+			else:
+				yield [i.name, i.status, i.created_at, i.visibility]
+
+	@classmethod
+	def deleteImage(cls, token, args):
+		images = ImageList(token)
+		vms = VMList(token)
+		for name in args.images:
+			vmid = vms.toVmid(name)
+			if vmid is None:
+				raise error.ImageNotFound(name)
+			images.delete(name)
 
 	@classmethod
 	@prettyPrint()
